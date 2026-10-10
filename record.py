@@ -22,7 +22,8 @@ RECORD_DIR = ROOT / "recorder"
 VENV_PYTHON = ROOT / "venv" / "Scripts" / "python.exe"
 
 args = sys.argv[1:]
-url = "https://seleniumbase.io/demo_page"
+# url = "https://seleniumbase.io/demo_page"
+url = "https://www.saucedemo.com/"
 test_name = ""
 priority = "P2"
 tags = []

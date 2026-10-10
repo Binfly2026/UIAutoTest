@@ -106,7 +106,8 @@ def _render_pytest_file(steps: list, test_id: str, test_name: str,
     out.append(f'@pytest.mark.browser_{browser}')
     for tag in tags:
         out.append(f'@pytest.mark.{tag}')
-    out.append(f'def {func_name}(page: Page):')
+    out.append('@pytest.mark.parametrize("_repeat", range(1))  # change range(N) to repeat N times')
+    out.append(f'def {func_name}(page: Page, _repeat: int):')
     out.append(f'    """{test_name}"""')
     out.append(f'    _ss = "{test_id}"')
     out.append(f'    def screenshot(name):')
