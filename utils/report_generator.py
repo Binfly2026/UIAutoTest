@@ -55,7 +55,7 @@ class ReportGenerator:
 
     def add_result(self, nodeid: str, outcome: str, duration: float,
                    source_file: str = "", priority: str = "", browser: str = "",
-                   error_info: str = ""):
+                   error_info: str = "", start_time: str = "", end_time: str = ""):
         raw_name = nodeid.split("::")[-1] if "::" in nodeid else nodeid
         m = re.search(r"\[(.+)\]", raw_name)
         display_name = m.group(1) if m else raw_name
@@ -69,6 +69,8 @@ class ReportGenerator:
             "browser": browser,
             "error_info": error_info,
             "error_summary": _parse_error(error_info),
+            "start_time": start_time,
+            "end_time": end_time,
         })
 
     def generate(self, run_date: str, run_time: str, executor: str = "") -> str:
@@ -91,7 +93,7 @@ class ReportGenerator:
         return str(report_path)
 
     def _collect_screenshots(self, screenshots_dir: Path, run_time: str = "") -> dict:
-        """Returns {source_stem: {_screenshots: {display_name, screenshots, failed}}}"""
+        """Returns {source_stem: {_screenshots: [{run_time, display_name, screenshots, failed}, ...]}}"""
         result = {}
         if not screenshots_dir.exists():
             return result
@@ -99,22 +101,36 @@ class ReportGenerator:
         for test_dir in sorted(screenshots_dir.iterdir()):
             if not test_dir.is_dir():
                 continue
-            time_dir = test_dir / run_time if run_time else test_dir
-            if not time_dir.exists():
-                continue
-            pngs = sorted(time_dir.glob("*.png"))
-            if not pngs:
-                continue
             is_failed = test_dir.name.endswith("[FAILED]")
             source_stem = test_dir.name.replace(" [FAILED]", "")
-            display_name = source_stem.replace("_", " ")
-            result[source_stem] = {
-                "_screenshots": {
+
+            # pick matching time_dir(s): exact match first, else latest
+            candidates = [d for d in sorted(test_dir.iterdir()) if d.is_dir() and any(d.glob("*.png"))]
+            if not candidates:
+                continue
+            matched = []
+            if run_time:
+                matched = [d for d in candidates if d.name == run_time]
+            if not matched:
+                # fallback: latest run
+                matched = [candidates[-1]]
+
+            runs = []
+            for time_dir in matched:
+                pngs = sorted(time_dir.glob("*.png"))
+                rt = time_dir.name
+                display_name = source_stem.replace("_", " ")
+                if len(matched) > 1 or len(runs) > 0:
+                    display_name += f" ({rt})"
+                runs.append({
+                    "run_time": rt,
                     "display_name": display_name,
                     "screenshots": [str(p) for p in pngs],
                     "failed": is_failed,
-                }
-            }
+                })
+
+            if runs:
+                result[source_stem] = {"_screenshots": runs}
 
         return result
 
@@ -144,33 +160,52 @@ class ReportGenerator:
 
         executor_info = f'&nbsp;|&nbsp; Executor: {executor}' if executor else ""
 
+        # --- flat table: one row per result, groups collapsed ---
         groups = {}
         for r in self.test_results:
             sf = r.get("source_file", "") or "Other"
             groups.setdefault(sf, []).append(r)
 
-        test_rows = ""
-        for file_name in sorted(groups.keys()):
-            entries = groups[file_name]
-            file_passed = sum(1 for e in entries if e["outcome"] == "passed")
-            file_failed = sum(1 for e in entries if e["outcome"] == "failed")
-            file_total = len(entries)
-            rows = ""
-            for r in entries:
-                icon = "✅" if r["outcome"] == "passed" else ("❌" if r["outcome"] == "failed" else "⏭️")
-                browser_display = r.get("browser", "") or "—"
-                priority_display = r.get("priority", "") or "—"
-                error_row = ""
-                if r["outcome"] == "failed" and r.get("error_summary"):
-                    es = r["error_summary"]
-                    err_line = es.get("error_line", "")
-                    err_type = es.get("error_type", "")
-                    line_no = es.get("line_no", "")
-                    err_text = f"Line {line_no}: {err_line}" if line_no and err_line else (err_line or err_type or "Error")
-                    full_trace = r.get("error_info", "").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
-                    error_row = f"""
+        # assign repeat index per source_file
+        repeat_counts = {}
+        for r in self.test_results:
+            sf = r.get("source_file", "") or "Other"
+            idx = repeat_counts.get(sf, 0) + 1
+            repeat_counts[sf] = idx
+            r["_repeat_idx"] = idx
+            r["_repeat_total"] = 0  # placeholder
+        for sf, cnt in repeat_counts.items():
+            for r in self.test_results:
+                if r.get("source_file", "") == sf or (not sf and not r.get("source_file")):
+                    r["_repeat_total"] = cnt
+
+        rows = ""
+        for r in self.test_results:
+            icon = "✅" if r["outcome"] == "passed" else ("❌" if r["outcome"] == "failed" else "⏭️")
+            browser_display = r.get("browser", "") or "—"
+            priority_display = r.get("priority", "") or "—"
+            source_file = r.get("source_file", "") or "Other"
+            repeat_total = r.get("_repeat_total", 1)
+            repeat_idx = r.get("_repeat_idx", 1)
+            repeat_display = f"{repeat_idx}/{repeat_total}" if repeat_total > 1 else "—"
+            start_time = r.get("start_time", "") or "—"
+            end_time = r.get("end_time", "") or "—"
+            status_class = "status-passed" if r["outcome"] == "passed" else ("status-failed" if r["outcome"] == "failed" else "status-skipped")
+
+            # link test name to screenshot section
+            test_link = f'<a href="#shots-{source_file}" class="test-link" title="Jump to screenshots">{source_file}</a>'
+
+            error_row = ""
+            if r["outcome"] == "failed" and r.get("error_summary"):
+                es = r["error_summary"]
+                err_line = es.get("error_line", "")
+                err_type = es.get("error_type", "")
+                line_no = es.get("line_no", "")
+                err_text = f"Line {line_no}: {err_line}" if line_no and err_line else (err_line or err_type or "Error")
+                full_trace = r.get("error_info", "").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
+                error_row = f"""
                 <tr class="error-detail">
-                    <td colspan="6">
+                    <td colspan="9">
                         <div class="error-box">
                             <div class="error-summary">❌ {err_type}: {err_text}</div>
                             <details class="error-expand">
@@ -180,30 +215,24 @@ class ReportGenerator:
                         </div>
                     </td>
                 </tr>"""
-                rows += f"""
+            rows += f"""
                 <tr class="{r['outcome']}">
                     <td>{icon}</td>
-                    <td>{r['name']}</td>
-                    <td>{r['outcome'].upper()}</td>
+                    <td>{test_link}</td>
+                    <td class="{status_class}">{r['outcome'].upper()}</td>
                     <td>{r['duration']}s</td>
                     <td><span class="tag tag-priority">{priority_display}</span></td>
                     <td><span class="tag tag-browser">{browser_display}</span></td>
+                    <td><span class="tag tag-repeat">{repeat_display}</span></td>
+                    <td class="time-cell">{start_time}</td>
+                    <td class="time-cell">{end_time}</td>
                 </tr>{error_row}"""
-            test_rows += f"""
-            <div class="file-group">
-                <h3 class="file-header">
-                    📄 {file_name}
-                    <span class="file-stats">
-                        {file_total} case(s) &nbsp;|&nbsp;
-                        <span class="stat-passed">{file_passed} passed</span>
-                        {"&nbsp;|&nbsp;<span class='stat-failed'>" + str(file_failed) + " failed</span>" if file_failed else ""}
-                    </span>
-                </h3>
-                <table>
-                    <thead><tr><th></th><th>Test</th><th>Status</th><th>Duration</th><th>Priority</th><th>Browser</th></tr></thead>
-                    <tbody>{rows}</tbody>
-                </table>
-            </div>"""
+
+        test_rows = f"""
+            <table>
+                <thead><tr><th></th><th>Test</th><th>Status</th><th>Duration</th><th>Priority</th><th>Browser</th><th>Repeat</th><th>Start</th><th>End</th></tr></thead>
+                <tbody>{rows}</tbody>
+            </table>"""
 
         screenshot_sections = ""
         case_images = {}  # {case_key: [(base64_full, caption), ...]}
@@ -218,27 +247,29 @@ class ReportGenerator:
 
         case_counter = 0
         for source_stem in all_stems:
-            tests = screenshots_by_test.get(source_stem, {})
-            if not tests:
+            runs_data = screenshots_by_test.get(source_stem, {})
+            if not runs_data:
                 continue
             display_name = stem_to_display.get(source_stem, source_stem)
+            runs = runs_data.get("_screenshots", [])
 
             screenshot_sections += f"""
-            <div class="file-screenshots">
-                <h3 class="file-header">📸 {display_name} — Screenshots</h3>"""
+            <div class="file-screenshots" id="shots-{source_stem}">
+                <h3 class="file-header">📸 {display_name} — Screenshots <span class="count">({len(runs)} run(s))</span></h3>"""
 
-            for test_dir_name, data in tests.items():
-                test_display = data["display_name"]
+            for run in runs:
+                test_display = run["display_name"]
+                run_time_label = run.get("run_time", "")
                 case_key = f"case{case_counter}"
                 case_counter += 1
-                is_failed = data["failed"]
+                is_failed = run["failed"]
                 failed_class = " failed-section" if is_failed else ""
                 icon = "❌ " if is_failed else "📸 "
-                count = len(data["screenshots"])
+                count = len(run["screenshots"])
                 thumbnails = ""
                 case_imgs = []
 
-                for img_path in data["screenshots"]:
+                for img_path in run["screenshots"]:
                     b64 = self._image_to_base64(img_path, thumbnail=True)
                     full_b64 = self._image_to_base64(img_path, thumbnail=False)
                     fname = Path(img_path).name
@@ -255,11 +286,12 @@ class ReportGenerator:
 
                 if thumbnails:
                     case_images[case_key] = case_imgs
+                    rt_badge = f' <span class="run-time-badge">{run_time_label}</span>' if run_time_label else ""
                     screenshot_sections += f"""
                     <div class="test-screenshots{failed_class}">
                         <h3 class="section-toggle" onclick="toggleSection(this)">
                             <span class="toggle-icon">▶</span>
-                            {icon}{test_display} <span class="count">({count} screenshots)</span>
+                            {icon}{test_display}{rt_badge} <span class="count">({count} screenshots)</span>
                         </h3>
                         <div class="section-content" style="display:none;">
                             <div class="thumb-gallery">{thumbnails}</div>
@@ -282,6 +314,7 @@ class ReportGenerator:
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Test Report {run_date} {run_time}</title>
 <style>
+html {{ scroll-behavior: smooth; }}
 * {{ margin: 0; padding: 0; box-sizing: border-box; }}
 body {{ font-family: 'Segoe UI', Arial, sans-serif; background: #f5f6fa; color: #2d3436; }}
 .header {{ background: linear-gradient(135deg, #2d3436, #636e72); color: #fff; padding: 24px 32px; }}
@@ -337,6 +370,15 @@ tr.failed {{ background: #fff5f5; }}
 .tag {{ display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; }}
 .tag-priority {{ background: #dfe6e9; color: #2d3436; }}
 .tag-browser {{ background: #e8f4fd; color: #0984e3; }}
+.tag-repeat {{ background: #f0e6f6; color: #6c5ce7; }}
+.test-link {{ color: #0984e3; text-decoration: none; font-weight: 600; }}
+.test-link:hover {{ text-decoration: underline; color: #0066cc; }}
+.test-link:visited {{ color: #6c5ce7; }}
+.status-passed {{ color: #00b894; font-weight: 700; }}
+.status-failed {{ color: #d63031; font-weight: 700; }}
+.status-skipped {{ color: #b2bec3; font-weight: 700; }}
+.time-cell {{ font-family: Consolas, monospace; font-size: 13px; color: #636e72; white-space: nowrap; }}
+.run-time-badge {{ font-size: 11px; color: #636e72; font-weight: normal; margin-left: 4px; }}
 .error-detail td {{ padding: 4px 20px 10px; }}
 .error-box {{ background: #fff3f3; border-left: 3px solid #d63031; border-radius: 4px; padding: 8px 14px; font-size: 13px; }}
 .error-summary {{ color: #d63031; font-weight: 600; margin-bottom: 6px; font-family: Consolas, "Courier New", monospace; }}

@@ -112,6 +112,9 @@ def _render_pytest_file(steps: list, test_id: str, test_name: str,
     out.append(f'    _ss = "{test_id}"')
     out.append(f'    def screenshot(name):')
     out.append(f'        screenshot_manager.take_step_screenshot(page, name, test_name=_ss)')
+    out.append(f'    def wait(seconds):')
+    out.append(f'        """Pause for N seconds."""')
+    out.append(f'        page.wait_for_timeout(seconds * 1000)')
     out.append("")
 
     frame_selector = None
@@ -124,7 +127,14 @@ def _render_pytest_file(steps: list, test_id: str, test_name: str,
             frame_selector = None
         for pl in py_lines:
             out.append(f"    {pl}")
+        out.append("    # wait(1)  # uncomment to pause 1 second between steps")
         out.append("")
+
+    # keep only first & last screenshot active, comment out the rest
+    screenshot_indices = [i for i, line in enumerate(out) if line.lstrip().startswith("screenshot(")]
+    if len(screenshot_indices) > 2:
+        for i in screenshot_indices[1:-1]:
+            out[i] = "# " + out[i]
 
     out.append("    # --------------------------------------------------")
     out.append("    # TODO: add custom verification points below")
@@ -151,17 +161,35 @@ def _step_to_py_lines(step: dict, frame_selector: str = None) -> list:
         lines.append(f"page.goto({_py_str(params['url'])})")
         lines.append('page.wait_for_load_state("domcontentloaded")')
         lines.append(f"screenshot({_py_str(f'navigate_{step_num}')})")
-        lines.append("# expect(page).to_have_title(\"...\")")
+        lines.append("# TODO: verify page content below")
+        lines.append('page_text = page.inner_text("body")')
+        lines.append('# page text save alongside screenshots (uncomment below)')
+        lines.append(f'# text_file = screenshot_manager.screenshot_dir / "page_texts" / "step_{step_num}.txt"')
+        lines.append('# text_file.parent.mkdir(parents=True, exist_ok=True)')
+        lines.append('# text_file.write_text(page_text, encoding="utf-8")')
+        lines.append('# assert "EXPECTED_CONTENT" in page_text, f"Expected text not found: {page_text[:200]}"')
 
     elif action == "click":
         lines.append(f"{loc(sel)}.click()")
         lines.append(f"screenshot({_py_str(f'click_{step_num}')})")
-        lines.append("# expect(page).to_have_url(\"...\")")
-
+        lines.append("# TODO: verify page content below")
+        lines.append('page_text = page.inner_text("body")')
+        lines.append('# page text save alongside screenshots (uncomment below)')
+        lines.append(f'# text_file = screenshot_manager.screenshot_dir / "page_texts" / "step_{step_num}.txt"')
+        lines.append('# text_file.parent.mkdir(parents=True, exist_ok=True)')
+        lines.append('# text_file.write_text(page_text, encoding="utf-8")')
+        lines.append('# assert "EXPECTED_CONTENT" in page_text, f"Expected text not found: {page_text[:200]}"')
+        lines.append("")
     elif action == "dblclick":
         lines.append(f"{loc(sel)}.dblclick()")
         lines.append(f"screenshot({_py_str(f'dblclick_{step_num}')})")
-        lines.append("# expect(page).to_have_url(\"...\")")
+        lines.append("# TODO: verify page content below")
+        lines.append('page_text = page.inner_text("body")')
+        lines.append('# page text save alongside screenshots (uncomment below)')
+        lines.append(f'# text_file = screenshot_manager.screenshot_dir / "page_texts" / "step_{step_num}.txt"')
+        lines.append('# text_file.parent.mkdir(parents=True, exist_ok=True)')
+        lines.append('# text_file.write_text(page_text, encoding="utf-8")')
+        lines.append('# assert "EXPECTED_CONTENT" in page_text, f"Expected text not found: {page_text[:200]}"')
 
     elif action == "fill":
         text = params.get("text", "")
@@ -367,6 +395,14 @@ def _handle_locator_action(selector: str, method: str, args_str: str) -> dict:
     elif method == "hover":
         return {"action": "hover", "params": {"selector": selector},
                 "description": f"Hover over {selector}"}
+    elif method == "drag_to":
+        target = ""
+        if args_str:
+            m = re.match(r"page\.locator\(['\"](.+?)['\"]\)", args_str.strip())
+            if m:
+                target = m.group(1)
+        return {"action": "drag_and_drop", "params": {"source": selector, "target": target},
+                "description": f"Drag {selector} -> {target}"}
     return None
 
 
@@ -418,6 +454,14 @@ def _handle_get_by_role(role: str, name: str, method: str, args_str: str) -> dic
     elif method == "hover":
         result = {"action": "hover", "params": {"selector": selector},
                   "description": f"Hover over {desc}"}
+    elif method == "drag_to":
+        target = ""
+        if args_str:
+            m = re.match(r"page\.locator\(['\"](.+?)['\"]\)", args_str.strip())
+            if m:
+                target = m.group(1)
+        result = {"action": "drag_and_drop", "params": {"source": selector, "target": target},
+                  "description": f"Drag {desc} -> {target}"}
 
     return result
 
@@ -446,6 +490,14 @@ def _handle_get_by_text(text: str, method: str, args_str: str) -> dict:
     elif method == "hover":
         result = {"action": "hover", "params": {"selector": f"text={text}"},
                   "description": f"Hover over text '{text}'"}
+    elif method == "drag_to":
+        target = ""
+        if args_str:
+            m = re.match(r"page\.locator\(['\"](.+?)['\"]\)", args_str.strip())
+            if m:
+                target = m.group(1)
+        result = {"action": "drag_and_drop", "params": {"source": f"text={text}", "target": target},
+                  "description": f"Drag text '{text}' -> {target}"}
     return result
 
 

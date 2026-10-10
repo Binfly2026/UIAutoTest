@@ -120,6 +120,13 @@ def pytest_runtest_makereport(item, call):
     if report.when == "call":
         source_file, priority, browser, test_name = _extract_meta(item)
         error_info = ""
+
+        # capture start / end timestamps
+        start_ts = getattr(report, "start", None)
+        end_ts = getattr(report, "stop", None)
+        start_time = datetime.fromtimestamp(start_ts).strftime("%H:%M:%S") if start_ts else ""
+        end_time = datetime.fromtimestamp(end_ts).strftime("%H:%M:%S") if end_ts else ""
+
         if report.failed:
             error_info = report.longreprtext if report.longreprtext else str(report.longrepr or "")
         _test_results.append({
@@ -130,6 +137,8 @@ def pytest_runtest_makereport(item, call):
             "priority": priority,
             "browser": browser,
             "error_info": error_info,
+            "start_time": start_time,
+            "end_time": end_time,
         })
 
 
@@ -144,7 +153,9 @@ def pytest_sessionfinish(session):
                              source_file=r.get("source_file", ""),
                              priority=r.get("priority", ""),
                              browser=r.get("browser", ""),
-                             error_info=r.get("error_info", ""))
+                             error_info=r.get("error_info", ""),
+                             start_time=r.get("start_time", ""),
+                             end_time=r.get("end_time", ""))
 
     now = datetime.now()
     run_date = os.environ.get("TEST_RUN_DATE", now.strftime("%y-%m-%d"))
