@@ -1,0 +1,10 @@
+__pycache__/
+.pytest_cache/
+venv/
+reports/
+recorder/
+browsers/
+offline_pkgs/
+test_case/*
+!test_case/conftest.py
+*.pyc
